@@ -1,0 +1,7 @@
+{
+  "cardiovascular": ["KCNH2", "hERG", "Alpha-1B adrenergic receptor", "Potassium voltage-gated channel subfamily H member 2"],
+  "metabolic_burden": ["CYP3A4", "CYP2D6", "CYP2C9", "CYP1A2", "CYP2C19", "Cytochrome P450"],
+  "hepatic_metabolic_burden": ["BSEP", "MRP2", "ABCB11", "ABCC2", "ABCB1", "ABCB4", "Bile salt export pump"],
+  "cns": ["CHRM1", "HTR2A", "DRD2"],
+  "inflammation": ["PTGS2", "COX-2", "ALOX5"]
+}

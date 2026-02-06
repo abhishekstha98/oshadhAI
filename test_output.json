@@ -1,0 +1,75 @@
+﻿{
+  "plausibility_score": -1.795,
+  "metrics": {
+    "coverage": 0.0,
+    "redundancy_penalty": 0.899,
+    "risk_penalty": 0.896,
+    "uncertainty": 0.866
+  },
+  "target_confidence_summary": {
+    "threshold": 0.2,
+    "max_prob_per_compound": {
+      "CCO": 0.093,
+      "CN1N=CC2=C1C(=O)N(C)C(=O)N2C": 0.077
+    },
+    "gated_target_counts": {
+      "CCO": 0,
+      "CN1N=CC2=C1C(=O)N(C)C(=O)N2C": 0
+    },
+    "note": "Targets below threshold are suppressed to prevent overinterpretation in lab settings."
+  },
+  "decision": {
+    "band": "LOW_PRIORITY",
+    "percentile": 49.0,
+    "recommendation": "Review formulation: Plausibility capped by risk or uncertainty constraints.",
+    "rule_trace": [
+      "COVERAGE_OVERRIDE: Near-zero target engagement, mapping to LOW_PRIORITY",
+      "COMPOUND_SIGNAL_OVERRIDE: High risk + high uncertainty"
+    ]
+  },
+  "dose_analysis": {
+    "input_mode": "normalized_weight",
+    "normalized_weights": {
+      "CCO": 0.5,
+      "CN1N=CC2=C1C(=O)N(C)C(=O)N2C": 0.5
+    },
+    "interpretation": "Formulation plausibility is sensitive to dose-weighting balance."
+  },
+  "biological_risk_assessment": {
+    "risk_penalty": 0.896,
+    "risk_level": "HIGH",
+    "primary_risk_factors": [
+      "Risk driven by high uncertainty / evidence sparsity under known data"
+    ],
+    "compound_level_flags": {
+      "CCO": [],
+      "CN1N=CC2=C1C(=O)N(C)C(=O)N2C": []
+    },
+    "interpretation": "Biological risk signals suggest selective metabolic or off-target concerns."
+  },
+  "contributors": [
+    {
+      "smiles": "CCO",
+      "contribution": -1.172,
+      "weight": 0.5,
+      "top_targets": [
+        "No high-confidence targets"
+      ],
+      "risk_flags": []
+    },
+    {
+      "smiles": "CN1N=CC2=C1C(=O)N(C)C(=O)N2C",
+      "contribution": -2.023,
+      "weight": 0.5,
+      "top_targets": [
+        "No high-confidence targets"
+      ],
+      "risk_flags": []
+    }
+  ],
+  "biological_context": {
+    "predicted_targets": [],
+    "coverage_interpretation": "No high-confidence target engagement identified under known data."
+  },
+  "disclaimer": "This score represents plausibility ranking under known compound-target biology. It does NOT predict biological reinforcement, therapeutic results, or human health outcomes. Experimental validation is required."
+}
