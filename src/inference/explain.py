@@ -19,6 +19,7 @@ from src.training.ranking import process_batch_smiles
 from src.ingest.db import DB_PATH
 from src.inference.scoring import normalize_dosage, map_categorical_dosage, apply_dose_weighting, normalize_potency
 from src.inference.feedback import FeedbackManager
+from src.inference.qsar import QsarPredictor
 from rdkit import Chem
 from rdkit.Chem import Crippen, Descriptors
 
@@ -68,6 +69,9 @@ class Explainer:
         
         # Load known compounds for novelty check (lazy load)
         self.known_inchi_keys = self._load_known_compounds()
+
+        # Initialize QSAR Predictor
+        self.qsar_predictor = QsarPredictor()
         
     def _load_known_compounds(self):
         """Load set of known InChIKeys for novelty detection."""
@@ -327,7 +331,31 @@ class Explainer:
         
         # Normalize early for consistent contributor analysis
         weights = normalize_dosage(weights) if weights else [1.0 / len(smiles_list)] * len(smiles_list)
-        potencies = normalize_potency(ic50_list) if ic50_list else [1.0 / len(smiles_list)] * len(smiles_list)
+        
+        # Handle Potency: Fallback to QSAR if IC50 is missing
+        potency_sources = {}
+        target_potencies = []
+        
+        if ic50_list:
+            target_potencies = normalize_potency(ic50_list)
+            for i, s in enumerate(smiles_list):
+                potency_sources[s] = "Experimental IC50"
+        else:
+            # QSAR Prediction Loop
+            raw_qsar_scores = []
+            for s in smiles_list:
+                q_score = self.qsar_predictor.predict_bioactivity(s)
+                raw_qsar_scores.append(q_score)
+                potency_sources[s] = f"QSAR Estimate (QED={q_score})"
+            
+            # Normalize QSAR scores to act as relative potency
+            total_q = sum(raw_qsar_scores)
+            if total_q > 0:
+                target_potencies = [q / total_q for q in raw_qsar_scores]
+            else:
+                target_potencies = [1.0 / len(smiles_list)] * len(smiles_list)
+
+        potencies = target_potencies
         
         # Combined influence vector W_i = normalize(w_i * p_i)
         combined_influences = [w * p for w, p in zip(weights, potencies)]
@@ -465,8 +493,9 @@ class Explainer:
                 "input_mode": "normalized_weight_and_potency",
                 "normalized_weights": {s: round(w, 2) for s, w in zip(smiles_list, weights)},
                 "normalized_potencies": {s: round(p, 2) for s, p in zip(smiles_list, potencies)},
+                "activity_source": potency_sources,
                 "combined_influence": {s: round(ci, 2) for s, ci in zip(smiles_list, combined_influences)},
-                "ic50_adjustment_explanation": "Combined influence scales compound embeddings by both relative dosage and biological potency (IC50). Lower IC50 values (higher potency) increase a compound's dominance in coverage and risk calculations."
+                "ic50_adjustment_explanation": "Combined influence scales compound embeddings by both relative dosage and biological potency. QSAR estimates (QED) are used when experimental IC50 is unavailable."
             },
             "biological_risk_assessment": {
                 "risk_penalty": round(base['risk'], 3),
