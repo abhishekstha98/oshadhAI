@@ -200,7 +200,17 @@ def train_stage3(stage1_ckpt="checkpoints/stage1.pt", epochs=10):
             # Target is 1 (pos > neg)
             target = torch.ones(pos_score.size(), device=device)
             
-            loss = criterion(pos_score, neg_score, target)
+            # Ranking Loss (Plausibility)
+            loss_plausibility = criterion(pos_score, neg_score, target)
+            
+            # Uncertainty Loss (Heuristic)
+            # We want Neg Uncertainty > Pos Uncertainty (Random mixes are more uncertain)
+            # So input1=neg_uncertainty, input2=pos_uncertainty, target=1
+            pos_unc = pos_outs['uncertainty']
+            neg_unc = neg_outs['uncertainty']
+            loss_uncertainty = criterion(neg_unc, pos_unc, target)
+            
+            loss = loss_plausibility + 0.1 * loss_uncertainty
             
             optimizer.zero_grad()
             loss.backward()

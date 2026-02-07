@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 class PlausibilityScorer(nn.Module):
     """
@@ -25,33 +26,36 @@ class PlausibilityScorer(nn.Module):
         self.redundancy_penalty_head = nn.Linear(embed_dim, 1) # Should be positive, subtracted
         self.risk_penalty_head = nn.Linear(embed_dim, 1)       # Should be positive, subtracted
         
-        # Uncertainty estimator (simple variance proxy or direct regression)
-        self.uncertainty_head = nn.Linear(embed_dim, 1)
+        # Uncertainty Decomposition Heads
+        # 1. Data Sparsity: Evidence density proxy
+        self.data_sparsity_head = nn.Linear(embed_dim, 1)
+        # 2. Prediction Variance: Conflicting signal proxy
+        self.prediction_variance_head = nn.Linear(embed_dim, 1)
+        # 3. Out-of-Distribution: Chemical novelty proxy
+        self.ood_head = nn.Linear(embed_dim, 1)
 
     def forward(self, formula_embedding):
         # coverage: higher is better
         coverage = torch.sigmoid(self.coverage_head(formula_embedding))
         
-        # penalties: constrained to be positive (0 to 1 range usually good for stability)
+        # penalties: constrained to be positive
         redundancy = torch.sigmoid(self.redundancy_penalty_head(formula_embedding))
         risk = torch.sigmoid(self.risk_penalty_head(formula_embedding))
         
-        uncertainty = F.softplus(self.uncertainty_head(formula_embedding))
+        # Uncertainty Components
+        u_sparsity = F.softplus(self.data_sparsity_head(formula_embedding))
+        u_variance = F.softplus(self.prediction_variance_head(formula_embedding))
+        u_ood = F.softplus(self.ood_head(formula_embedding))
         
-        # Final Score Logic (Configurable)
-        # Score = Coverage - (Redundancy * alpha) - (Risk * beta)
-        # Here we output the components for the loss function to guide them
-        # The final scalar might be assembled differently during inference
+        # Total Uncertainty (Weighted Sum)
+        uncertainty = u_sparsity + u_variance + u_ood
         
-        # For training, we predict a "Plausibility Logit" or similar if we had labels.
-        # Since this is "plausibility under known biology", we might train these heads 
-        # via contrastive learning (positive sets vs negative sets).
-        
-        # Returning dictionary for modular loss calculation
         return {
             'coverage': coverage,
             'redundancy': redundancy,
             'risk': risk,
-            'uncertainty': uncertainty
+            'uncertainty': uncertainty,
+            'u_sparsity': u_sparsity,
+            'u_variance': u_variance,
+            'u_ood': u_ood
         }
-import torch.nn.functional as F

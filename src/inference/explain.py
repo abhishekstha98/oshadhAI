@@ -477,6 +477,15 @@ class Explainer:
                 "risk_penalty": round(base['risk'], 3),
                 "uncertainty": round(base['uncertainty'], 3)
             },
+            "uncertainty_explained": {
+                "total": round(base['uncertainty'], 3),
+                "sources": {
+                    "data_sparsity": round(base.get('u_sparsity', 0.0), 3),
+                    "prediction_variance": round(base.get('u_variance', 0.0), 3),
+                    "out_of_distribution": round(base.get('u_ood', 0.0), 3)
+                },
+                "interpretation": self._explain_uncertainty(base['uncertainty'])
+            },
             "target_confidence_summary": {
                 "threshold": self.CONFIDENCE_THRESHOLD,
                 "max_prob_per_compound": {s: round(p["max_prob"], 3) for s, p in raw_preds.items()},
