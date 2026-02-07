@@ -17,6 +17,10 @@ from src.model.scorer import PlausibilityScorer
 from src.model.heads import TargetPredictor
 from src.training.ranking import process_batch_smiles
 from src.ingest.db import DB_PATH
+from src.inference.scoring import normalize_dosage, map_categorical_dosage, apply_dose_weighting, normalize_potency
+from src.inference.feedback import FeedbackManager
+from rdkit import Chem
+from rdkit.Chem import Crippen, Descriptors
 
 class Explainer:
     def __init__(self, checkpoints_dir="checkpoints"):
@@ -59,6 +63,23 @@ class Explainer:
         # Load curated risk allowlists
         self.risk_allowlist = self._load_risk_allowlist()
         
+        # Initialize Feedback Manager
+        self.feedback_manager = FeedbackManager()
+        
+        # Load known compounds for novelty check (lazy load)
+        self.known_inchi_keys = self._load_known_compounds()
+        
+    def _load_known_compounds(self):
+        """Load set of known InChIKeys for novelty detection."""
+        try:
+            con = duckdb.connect(str(DB_PATH), read_only=True)
+            keys = con.execute("SELECT inchi_key FROM compounds").fetchall()
+            con.close()
+            return set(k[0] for k in keys)
+        except Exception as e:
+            logging.warning(f"Could not load known compounds: {e}")
+            return set()
+        
     def _load_risk_allowlist(self):
         """Load curated target allowlists for biological risk signals."""
         path = Path(__file__).parent.parent / "resources" / "risk_target_allowlists.json"
@@ -90,9 +111,9 @@ class Explainer:
     
     # Dose Categorical Mapping (Heuristic Ordinal Scale)
     DOSE_MAP = {
-        "LOW": 0.5,
-        "MEDIUM": 1.0,
-        "HIGH": 1.5
+        "LOW": 0.33,
+        "MEDIUM": 0.66,
+        "HIGH": 1.0
     }
     
     CONFIDENCE_THRESHOLD = 0.20 # τ - Lab-Readiness Enforcement
@@ -255,30 +276,22 @@ class Explainer:
             
         return sensitivities
 
-    def score_set(self, smiles_list, weights=None):
+    def score_set(self, smiles_list, weights=None, ic50_list=None):
         """
-        Returns raw score components and overall score with optional dosage weighting.
+        Returns raw score components and overall score with optional dosage/potency weighting.
         """
         if not smiles_list:
             return None
             
-        # Default to equal weights if none provided
-        if weights is None:
-            weights = [1.0 / len(smiles_list)] * len(smiles_list)
-        else:
-            # Normalize weights to sum to 1.0
-            sum_w = sum(weights)
-            if sum_w > 0:
-                weights = [w / sum_w for w in weights]
-            else:
-                weights = [1.0 / len(smiles_list)] * len(smiles_list)
+        # 1. Normalize and weight dosage/potency
+        weights = normalize_dosage(weights) if weights else [1.0 / len(smiles_list)] * len(smiles_list)
+        potencies = normalize_potency(ic50_list) if ic50_list else [1.0 / len(smiles_list)] * len(smiles_list)
 
         emb, mask = process_batch_smiles([smiles_list], self.encoder, self.device)
         if emb is None: return None
         
-        # Apply scaling: h_i' = w_i * h_i
-        w_tensor = torch.tensor(weights, device=self.device, dtype=torch.float).view(1, -1, 1)
-        emb = emb * w_tensor
+        # 2. Apply scaling: h_i' = W_i * h_i
+        emb = apply_dose_weighting(emb, weights, potencies, self.device)
         
         formula = self.reasoner(emb, mask=mask)
         components = self.scorer(formula)
@@ -290,22 +303,42 @@ class Explainer:
         res['total_score'] = res['coverage'] - res['redundancy'] - res['risk']
         return res
 
-    def explain(self, smiles_list, weights=None, weights_levels=None):
+    def explain(self, smiles_list, weights=None, weights_levels=None, ic50_list=None):
         """
         Generate full explanation with Lab-Readiness overrides.
         """
-        # 1. Handle Dosage
+        # --- 0. Feedback Check ---
+        feedback_entry = self.feedback_manager.get_feedback(smiles_list)
+        feedback_boost = 0.0
+        feedback_override_band = None
+        
+        if feedback_entry:
+            lbl = feedback_entry["label"]
+            if lbl == "VALID": feedback_boost = 0.5
+            elif lbl == "SYNERGY": feedback_boost = 1.0
+            elif lbl == "INERT": feedback_boost = -0.5
+            elif lbl == "TOXIC": 
+                feedback_override_band = "DISCARD"
+                # Force high risk later
+
+        # 1. Handle Dosage and Potency
         if weights_levels is not None and weights is None:
-            weights = [self.DOSE_MAP.get(lv, 1.0) for lv in weights_levels]
-        if weights is None:
-            weights = [1.0] * len(smiles_list)
+            weights = map_categorical_dosage(weights_levels)
+        
+        # Normalize early for consistent contributor analysis
+        weights = normalize_dosage(weights) if weights else [1.0 / len(smiles_list)] * len(smiles_list)
+        potencies = normalize_potency(ic50_list) if ic50_list else [1.0 / len(smiles_list)] * len(smiles_list)
+        
+        # Combined influence vector W_i = normalize(w_i * p_i)
+        combined_influences = [w * p for w, p in zip(weights, potencies)]
+        combined_influences = normalize_dosage(combined_influences)
             
         # 2. Target Predictions (Gated)
         raw_preds = {s: self._predict_targets(s) for s in smiles_list}
         total_gated_count = sum(p["count"] for p in raw_preds.values())
         
         # 3. Base Score (Weighted)
-        base = self.score_set(smiles_list, weights)
+        base = self.score_set(smiles_list, weights, ic50_list)
         if base is None: return {"error": "Invalid input"}
         
         # Gating Enforcement: Zero coverage if no high-confidence targets
@@ -319,10 +352,19 @@ class Explainer:
         final_band = base_band
         rule_trace = []
         
+        # Apply feedback boost to score BEFORE banding (unless toxic)
+        if feedback_entry and feedback_entry["label"] != "TOXIC":
+            base['total_score'] += feedback_boost
+
         if base['uncertainty'] >= 0.85:
             if final_band in ["HIGH_PRIORITY", "CRITICAL"]:
                 final_band = "INVESTIGATE"
                 rule_trace.append("UNCERTAINTY_OVERRIDE: Extreme sparsity, capping at INVESTIGATE")
+        
+        # Apply Feedback Override to Band
+        if feedback_override_band:
+            final_band = feedback_override_band
+            rule_trace.append(f"FEEDBACK_OVERRIDE: Lab marked as {feedback_entry['label']}")
         
         if base['risk'] >= 0.80:
             if final_band in ["HIGH_PRIORITY", "CRITICAL"]:
@@ -335,8 +377,9 @@ class Explainer:
                 rule_trace.append("COVERAGE_OVERRIDE: Near-zero target engagement, mapping to LOW_PRIORITY")
         
         if base['risk'] >= 0.85 and base['uncertainty'] >= 0.85:
-            final_band = "LOW_PRIORITY"
-            rule_trace.append("COMPOUND_SIGNAL_OVERRIDE: High risk + high uncertainty")
+            if final_band != "DISCARD":
+                final_band = "LOW_PRIORITY"
+                rule_trace.append("COMPOUND_SIGNAL_OVERRIDE: High risk + high uncertainty")
             
         if total_gated_count == 0:
             if final_band not in ["DISCARD", "LOW_PRIORITY"]:
@@ -362,6 +405,11 @@ class Explainer:
         # Risk Fallback for Lab-Readiness
         if base['risk'] >= 0.60 and not primary_risk_factors:
             primary_risk_factors.append("Risk driven by high uncertainty / evidence sparsity under known data")
+
+        # FEEDBACK OVERRIDE FOR RISK
+        if feedback_entry and feedback_entry["label"] == "TOXIC":
+            base['risk'] = 1.0
+            primary_risk_factors.insert(0, "Lab Validation Failure: Marked TOXIC by tester.")
 
         # 6. Contributor Analysis (Ablation with Weights)
         sum_w = sum(weights)
@@ -414,9 +462,11 @@ class Explainer:
                 "rule_trace": rule_trace if rule_trace else ["Applied: PERCENTILE_MAPPING"]
             },
             "dose_analysis": {
-                "input_mode": "normalized_weight",
-                "normalized_weights": norm_weights,
-                "interpretation": "Formulation plausibility is sensitive to dose-weighting balance."
+                "input_mode": "normalized_weight_and_potency",
+                "normalized_weights": {s: round(w, 2) for s, w in zip(smiles_list, weights)},
+                "normalized_potencies": {s: round(p, 2) for s, p in zip(smiles_list, potencies)},
+                "combined_influence": {s: round(ci, 2) for s, ci in zip(smiles_list, combined_influences)},
+                "ic50_adjustment_explanation": "Combined influence scales compound embeddings by both relative dosage and biological potency (IC50). Lower IC50 values (higher potency) increase a compound's dominance in coverage and risk calculations."
             },
             "biological_risk_assessment": {
                 "risk_penalty": round(base['risk'], 3),
@@ -430,10 +480,58 @@ class Explainer:
                 "predicted_targets": list(set([t for p in raw_preds.values() for t in p["targets"] if t != "No high-confidence targets"]))[:5],
                 "coverage_interpretation": "Broad biological engagement identified" if total_gated_count >= 3 else "No high-confidence target engagement identified under known data."
             },
+            "adme_simulation": self._compute_adme_placeholders(smiles_list),
+            "novelty_report": self._compute_novelty(smiles_list),
+            "feedback_status": {
+                "has_feedback": bool(feedback_entry),
+                "label": feedback_entry["label"] if feedback_entry else None,
+                "score_adjustment": feedback_boost if feedback_entry else 0.0
+            },
             "disclaimer": "This score represents plausibility ranking under known compound-target biology. It does NOT predict biological reinforcement, therapeutic results, or human health outcomes. Experimental validation is required."
         }
         
         return output
+
+    def _compute_adme_placeholders(self, smiles_list):
+        """Compute ADME proxies (LogP) and placeholders."""
+        adme_data = []
+        for s in smiles_list:
+            mol = Chem.MolFromSmiles(s)
+            logP = Crippen.MolLogP(mol) if mol else 0.0
+            mw = Descriptors.MolWt(mol) if mol else 0.0
+            # Lipinski-like proxies
+            solubility_proxy = "High" if logP < 3 else "Moderate" if logP < 5 else "Low"
+            bbb_proxy = "Permeable" if (logP > 0 and logP < 3 and mw < 450) else "Impermeable" # simplified
+            
+            adme_data.append({
+                "smiles": s,
+                "logP_proxy": round(logP, 2),
+                "solubility_class": f"{solubility_proxy} (Simulated)",
+                "blood_brain_barrier": f"{bbb_proxy} (Simulated)",
+                "metabolic_stability": "Unknown (Placeholder)"
+            })
+        return adme_data
+
+    def _compute_novelty(self, smiles_list):
+        """Check if compounds are known in the database."""
+        known_count = 0
+        novel_compounds = []
+        
+        for s in smiles_list:
+            mol = Chem.MolFromSmiles(s)
+            if not mol: continue
+            ikey = Chem.MolToInchiKey(mol)
+            if ikey in self.known_inchi_keys:
+                known_count += 1
+            else:
+                novel_compounds.append(s)
+                
+        return {
+            "known_compounds": known_count,
+            "novel_compounds": len(novel_compounds),
+            "novel_smiles": novel_compounds,
+            "inference_method": "Graph Isomorphism Network (Generalization)" if novel_compounds else "Database Lookup"
+        }
 
     def _percentile_desc(self, p):
         """Describe percentile in human terms."""

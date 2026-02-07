@@ -31,9 +31,17 @@ def main():
     
     # Score
     score_parser = subparsers.add_parser("score", help="Score a combination")
-    score_parser.add_argument("smiles", nargs="+", help="List of SMILES strings")
+    score_parser.add_argument("smiles", nargs="*", help="List of SMILES strings (optional if --json is used)")
     score_parser.add_argument("--weights", type=float, nargs="+", help="Relative weights for each compound (must match SMILES count)")
     score_parser.add_argument("--weights-levels", nargs="+", help="Categorical weights: LOW, MEDIUM, HIGH (must match SMILES count)")
+    score_parser.add_argument("--ic50", type=float, nargs="+", help="IC50 values for each compound (must match SMILES count)")
+    score_parser.add_argument("--json", help="JSON string or file path containing compound/dosage/ic50 list (e.g. '[{\"smiles\": \"...\", \"dosage\": 0.5, \"ic50\": 1.2}, ...]')")
+    
+    # Feedback
+    feedback_parser = subparsers.add_parser("feedback", help="Submit lab validation feedback")
+    feedback_parser.add_argument("label", choices=["VALID", "TOXIC", "SYNERGY", "INERT"], help="Validation label")
+    feedback_parser.add_argument("smiles", nargs="+", help="List of SMILES strings in the formulation")
+    feedback_parser.add_argument("--notes", default="", help="Optional notes or observations")
     
     args = parser.parse_args()
     
@@ -84,9 +92,55 @@ def main():
         import json
         
         explainer = Explainer()
-        result = explainer.explain(args.smiles, weights=args.weights, weights_levels=args.weights_levels)
         
+        smiles = args.smiles
+        weights = args.weights
+        weights_levels = args.weights_levels
+        ic50_list = args.ic50
+        
+        if args.json:
+            try:
+                # Try to load as file first
+                if Path(args.json).exists():
+                    with open(args.json, 'r') as f:
+                        data = json.load(f)
+                else:
+                    data = json.loads(args.json)
+                
+                if isinstance(data, list):
+                    smiles = [item['smiles'] for item in data]
+                    # Check if 'dosage' is numeric or string
+                    first_item = data[0]
+                    first_dosage = first_item.get('dosage')
+                    if isinstance(first_dosage, (int, float)):
+                        weights = [item.get('dosage') for item in data]
+                        weights_levels = None
+                    else:
+                        weights_levels = [item.get('dosage') for item in data]
+                        weights = None
+                    
+                    # Extract IC50 if present
+                    if 'ic50' in first_item:
+                        ic50_list = [item.get('ic50') for item in data]
+            except Exception as e:
+                logging.error(f"Failed to parse JSON input: {e}")
+                sys.exit(1)
+        
+        if not smiles:
+            logging.error("No SMILES provided. Use positional arguments or --json.")
+            sys.exit(1)
+            
+        result = explainer.explain(smiles, weights=weights, weights_levels=weights_levels, ic50_list=ic50_list)
         print(json.dumps(result, indent=2))
+        
+    elif args.command == "feedback":
+        from src.inference.feedback import FeedbackManager
+        
+        manager = FeedbackManager()
+        manager.submit_feedback(args.smiles, args.label, args.notes)
+        print(f"Feedback submitted successfully for {len(args.smiles)} compounds.")
+        print(f"Label: {args.label}")
+        print(f"Notes: {args.notes}")
         
     else:
         parser.print_help()

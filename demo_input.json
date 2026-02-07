@@ -1,0 +1,32 @@
+[
+    {
+        "smiles": "CCO",
+        "compound_name": "Ethanol",
+        "dosage": 0.3,
+        "ic50": 15.0
+    },
+    {
+        "smiles": "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
+        "compound_name": "Caffeine",
+        "dosage": 0.5,
+        "ic50": 2.5
+    },
+    {
+        "smiles": "C1=CC=CC=C1",
+        "compound_name": "Benzene",
+        "dosage": 0.2,
+        "ic50": 10.0
+    },
+    {
+        "smiles": "CC(=O)OC1=CC=CC=C1C(=O)O",
+        "compound_name": "Aspirin",
+        "dosage": 0.7,
+        "ic50": 1.2
+    },
+    {
+        "smiles": "CC(=O)NC1=CC=C(C=C1)C(=O)O",
+        "compound_name": "Acetaminophen",
+        "dosage": 0.4,
+        "ic50": 5.0
+    }
+]
