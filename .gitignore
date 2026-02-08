@@ -49,3 +49,7 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
+
+# Deployment Artifacts
+api-oshadh/
+output_verify.json

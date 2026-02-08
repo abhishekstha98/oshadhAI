@@ -14,25 +14,34 @@ I have already created the necessary files in your repository:
 
 ---
 
-## Option 1: Hugging Face Spaces (FREE & FASTEST) 
-**Best for**: Internal tools, demos, free hosting.
+## Option 1: Hugging Face Spaces (RECOMMENDED)
+**Best for**: Free hosting, Zero-Setup, Docker-based.
 
-1.  **Create Account**: Go to [huggingface.co](https://huggingface.co) and sign up.
-2.  **Create Space**:
-    *   Click **New Space**.
-    *   Name: `antigravity-api`.
-    *   SDK: Select **Docker**.
-    *   Privacy: **Public** or **Private** (Private requires a token to access).
-    *   Create Space.
-3.  **Upload Code**:
-    *   Use the web interface or git to upload your entire repository context.
-    *   CRITICAL: Ensure `data/herb_combinator.duckdb` and `checkpoints/` are uploaded (Git LFS might be needed for large files).
-4.  **Wait for Build**:
-    *   Hugging Face will automatically find the `Dockerfile` and build the container.
-    *   Once "Running", your API is live at `https://huggingface.co/spaces/USERNAME/antigravity-api`.
-5.  **Usage**:
-    *   Colleague visits: `https://.../docs` to see the interactive API UI.
-    *   Web App calls: `POST https://.../score`
+1.  **Create Space**:
+    -   Go to [huggingface.co/spaces](https://huggingface.co/spaces) -> **Create new Space**.
+    -   **SDK**: Select **Docker**.
+    -   Name: `antigravity-api`.
+
+2.  **Push Your Code**:
+    Since we enabled **Lightweight Inference**, you do **NOT** need to upload the 1.2GB database. The system will use the optimized `data/inference/*.json.gz` files.
+    
+    Simply run:
+    ```bash
+    git add Dockerfile requirements.txt .dockerignore src/api.py
+    git commit -m "Configure Docker Deployment"
+    git push origin main
+    ```
+    *(Or drag-and-drop these files via the web interface)*.
+
+3.  **Automatic Build**:
+    -   Hugging Face will detect the `Dockerfile` and build the container.
+    -   It will install dependencies from `requirements.txt`.
+    -   The API will launch automatically (Status: **Running**).
+
+4.  **Usage**:
+    -   **API Docs**: `https://huggingface.co/spaces/USERNAME/antigravity-api/docs`
+    -   **Score Endpoint**: `POST /score`
+
 
 ---
 

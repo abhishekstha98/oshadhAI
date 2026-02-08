@@ -1,10 +1,22 @@
+# Torch CPU (keeping image small)
 torch==2.0.1+cpu --index-url https://download.pytorch.org/whl/cpu
+
+# Data Processing
 numpy
 pandas
+scikit-learn
+networkx
 duckdb==0.9.2
+
+# Chemistry
 rdkit
+
+# API Server
 fastapi
 uvicorn
 pydantic
-scikit-learn
+python-multipart
+
+# Utilities
 tqdm
+requests

@@ -1,0 +1,30 @@
+# Exclude Large Data
+data/herb_combinator.duckdb
+data/*.duckdb
+datasets/
+checkpoints/*.zip
+old_checkpoints/
+
+# Exclude Environment
+venv/
+env/
+.env
+
+# Exclude Git
+.git/
+.gitignore
+
+# Exclude IDE
+.vscode/
+.idea/
+
+# Exclude Temp
+__pycache__/
+*.pyc
+tmp/
+dist/
+build/
+output_verify.json
+test_output.json
+full_output.json
+*.log
