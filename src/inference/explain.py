@@ -75,13 +75,26 @@ class Explainer:
         
     def _load_known_compounds(self):
         """Load set of known InChIKeys for novelty detection."""
+        # 1. Try Loading Lightweight Artifact (JSON.GZ)
+        artifact_path = Path(__file__).parent.parent.parent / "data" / "inference" / "known_compounds.json.gz"
+        if artifact_path.exists():
+            try:
+                import gzip
+                with gzip.open(artifact_path, 'rt', encoding='utf-8') as f:
+                    keys = json.load(f)
+                logging.info(f"Loaded {len(keys)} known compounds from artifact.")
+                return set(keys)
+            except Exception as e:
+                logging.warning(f"Failed to load known compounds artifact: {e}")
+
+        # 2. Fallback to Database
         try:
             con = duckdb.connect(str(DB_PATH), read_only=True)
             keys = con.execute("SELECT inchi_key FROM compounds").fetchall()
             con.close()
             return set(k[0] for k in keys)
         except Exception as e:
-            logging.warning(f"Could not load known compounds: {e}")
+            logging.warning(f"Could not load known compounds from DB: {e}")
             return set()
         
     def _load_risk_allowlist(self):
@@ -103,15 +116,12 @@ class Explainer:
         try:
             with open(path, 'r') as f:
                 data = json.load(f)
-                # Handle new nested format or legacy flat format
                 if "percentiles" in data:
                     return data["percentiles"]
                 return data
         except FileNotFoundError:
             logging.warning(f"Calibration file not found at {path}. Percentiles unavailable.")
             return None
-    
-    # Curated Target Allowlists moved to file
     
     # Dose Categorical Mapping (Heuristic Ordinal Scale)
     DOSE_MAP = {
@@ -123,12 +133,22 @@ class Explainer:
     CONFIDENCE_THRESHOLD = 0.20 # τ - Lab-Readiness Enforcement
     
     def _load_target_names(self, db_path=DB_PATH):
-        """Load target ID -> name mapping from database, matching training index."""
+        """Load target ID -> name mapping from artifact or database."""
+        # 1. Try Loading Lightweight Artifact (JSON)
+        artifact_path = Path(__file__).parent.parent.parent / "data" / "inference" / "targets.json"
+        if artifact_path.exists():
+            try:
+                with open(artifact_path, 'r') as f:
+                    # keys in json are always strings, map back to int
+                    data = json.load(f)
+                    return {int(k): v for k, v in data.items()}
+            except Exception as e:
+                logging.warning(f"Failed to load targets artifact: {e}")
+
+        # 2. Fallback to Database
         try:
             con = duckdb.connect(str(db_path), read_only=True)
             # Reconstruct the exact same list used in training loader
-            # loader.py used: SELECT DISTINCT target_id FROM activities
-            # For consistency, we should ideally have sorted this, but we must match what was done.
             targets_query = "SELECT DISTINCT target_id FROM activities"
             trained_targets = con.execute(targets_query).fetchall()
             
@@ -141,7 +161,7 @@ class Explainer:
             # Return {index: name} where index is the position in the training target list
             return {i: id_to_name.get(tid[0], f"ID_{tid[0]}") for i, tid in enumerate(trained_targets)}
         except Exception as e:
-            logging.warning(f"Could not load target names: {e}")
+            logging.warning(f"Could not load target names from DB: {e}")
             return {}
 
     def _get_percentile(self, score):
@@ -475,17 +495,17 @@ class Explainer:
                 "coverage": round(base['coverage'], 3),
                 "redundancy_penalty": round(base['redundancy'], 3),
                 "risk_penalty": round(base['risk'], 3),
-                "uncertainty": round(base['uncertainty'], 3)
+                #"uncertainty": round(base['uncertainty'], 3)
             },
-            "uncertainty_explained": {
-                "total": round(base['uncertainty'], 3),
-                "sources": {
-                    "data_sparsity": round(base.get('u_sparsity', 0.0), 3),
-                    "prediction_variance": round(base.get('u_variance', 0.0), 3),
-                    "out_of_distribution": round(base.get('u_ood', 0.0), 3)
-                },
-                "interpretation": self._explain_uncertainty(base['uncertainty'])
-            },
+            #"uncertainty_explained": {
+            #    "total": round(base['uncertainty'], 3),
+            #    "sources": {
+            #        "data_sparsity": round(base.get('u_sparsity', 0.0), 3),
+            #        "prediction_variance": round(base.get('u_variance', 0.0), 3),
+            #        "out_of_distribution": round(base.get('u_ood', 0.0), 3)
+            #    },
+            #    "interpretation": self._explain_uncertainty(base['uncertainty'])
+            #},
             "target_confidence_summary": {
                 "threshold": self.CONFIDENCE_THRESHOLD,
                 "max_prob_per_compound": {s: round(p["max_prob"], 3) for s, p in raw_preds.items()},
@@ -494,7 +514,7 @@ class Explainer:
             },
             "decision": {
                 "band": final_band,
-                "percentile": round(percentile, 1) if percentile else 0.0,
+                #"percentile": round(percentile, 1) if percentile else 0.0,
                 "recommendation": base_rec if final_band == base_band else "Review formulation: Plausibility capped by risk or uncertainty constraints.",
                 "rule_trace": rule_trace if rule_trace else ["Applied: PERCENTILE_MAPPING"]
             },
@@ -511,20 +531,20 @@ class Explainer:
                 "risk_level": "HIGH" if base['risk'] > 0.7 else "MODERATE" if base['risk'] > 0.4 else "LOW",
                 "primary_risk_factors": primary_risk_factors,
                 "compound_level_flags": compound_risk_flags,
-                "interpretation": "Biological risk signals suggest selective metabolic or off-target concerns."
+                #"interpretation": "Biological risk signals suggest selective metabolic or off-target concerns."
             },
             "contributors": contributor_details,
             "biological_context": {
                 "predicted_targets": list(set([t for p in raw_preds.values() for t in p["targets"] if t != "No high-confidence targets"]))[:5],
-                "coverage_interpretation": "Broad biological engagement identified" if total_gated_count >= 3 else "No high-confidence target engagement identified under known data."
+                #"coverage_interpretation": "Broad biological engagement identified" if total_gated_count >= 3 else "No high-confidence target engagement identified under known data."
             },
             "adme_simulation": self._compute_adme_placeholders(smiles_list),
-            "novelty_report": self._compute_novelty(smiles_list),
-            "feedback_status": {
-                "has_feedback": bool(feedback_entry),
-                "label": feedback_entry["label"] if feedback_entry else None,
-                "score_adjustment": feedback_boost if feedback_entry else 0.0
-            },
+            #"novelty_report": self._compute_novelty(smiles_list),
+            #"feedback_status": {
+            #    "has_feedback": bool(feedback_entry),
+            #    "label": feedback_entry["label"] if feedback_entry else None,
+            #    "score_adjustment": feedback_boost if feedback_entry else 0.0
+            #},
             "disclaimer": "This score represents plausibility ranking under known compound-target biology. It does NOT predict biological reinforcement, therapeutic results, or human health outcomes. Experimental validation is required."
         }
         
